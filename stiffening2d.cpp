@@ -438,13 +438,14 @@ int main(int argc, char** argv) {
         opt.print_quality();
         std::cerr << "SUCCESS; running time: " << time.count() << " s; min det J = " << opt.detmin << std::endl;
     } else {
-        std::cerr << "FAIL TO UNTANGLE!" << std::endl;
+        std::cerr << "FAIL" << std::endl;
         return -1;
     }
 
     for (int v : vert_iter(m))
         for (int d : range(2))
             tex_coord[v][d] = opt.X[2*v+d];
+    write_by_extension(res_filename, m, SurfaceAttributes{ { {"tex_coord", tex_coord.ptr} }, {}, {} });
 
     return 0;
 }
