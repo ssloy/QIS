@@ -5,7 +5,7 @@
 #include <cstring>
 #include <chrono>
 
-#define UNTANGLE 0
+#define UNTANGLE 0 // use at your own risk, it is not the best implementation
 
 #define USE_EIGEN 0
 #if USE_EIGEN
@@ -48,16 +48,7 @@ struct Untangle2D {
             area[t] = m.util.unsigned_area(t);
             vec2 A,B,C;
             m.util.project(t, A, B, C);
-
-//          double ar = triangle_aspect_ratio_2d(A, B, C);
-//          if (ar>10) { // if the aspect ratio is bad, assign an equilateral reference triangle
-//              double a = ((B-A).norm() + (C-B).norm() + (A-C).norm())/3.; // edge length is the average of the original triangle
-//              area[t] = sqrt(3.)/4.*a*a;
-//              A = {0., 0.};
-//              B = {a, 0.};
-//              C = {a/2., std::sqrt(3.)/2.*a};
-//          }
-
+            um_assert(triangle_area_2d(A,B,C)>0);
             mat<2,2> ST = {{B-A, C-A}};
             ref_tri[t] = mat<3,2>{{ {-1,-1},{1,0},{0,1} }}*ST.invert_transpose();
         }
@@ -125,7 +116,6 @@ struct Untangle2D {
             detmin = std::min(detmin, det[t]);
             ninverted += (det[t]<=0);
         }
-//      std::cerr <<  " detmin: " << detmin << " ninv: " << ninverted << std::endl;
     }
 
     double evaluate_energy(const double eps, const std::vector<double> &X) {
@@ -183,7 +173,6 @@ struct Untangle2D {
 #endif
 
         if (debug>3) std::cerr << "preparing the matrix...";
-        std::vector<double> Grd(sln.size(), 0); // debug
         for (int t : facet_iter(m)) {
 #if UNTANGLE
             double c1 = chi(eps, det[t]);
@@ -215,7 +204,6 @@ struct Untangle2D {
 #else
                     nlAddIRightHandSide(v, val);
 #endif
-                    Grd[v] += val; // debug
                 }
             }
 
@@ -229,7 +217,7 @@ struct Untangle2D {
             mat<2,2> Pii = ((Fii*(1.-theta) + Gii*theta)/pow(1.-eps*((1.-theta)*f + theta*g), 2.) + (tmp*tmp.transpose())*2.*eps/pow(1.-eps*((1.-theta)*f + theta*g), 3.)) * area[t];
 #endif
 
-//TODO OPENNL symmetric, check derivatives (AGAIN, SIGH), check incomplete cholesky by kaporin, remove locked vertices
+            //TODO check incomplete cholesky by kaporin, remove locked vertices
             for (int i=0; i<3; i++) {
                 int vi = m.vert(t,i);
                 if (lock[vi]) continue;
@@ -286,16 +274,6 @@ struct Untangle2D {
         }
         nlDeleteContext(nlGetCurrent());
 #endif
-        double n2 = 0;
-        double dot = 0;
-        for (int i=0; i<(int)sln.size(); i++) {
-            n2 += Grd[i]*Grd[i];
-            dot += Grd[i]*sln[i];
-        }
-//      std::cerr << "|G| = " << std::sqrt(n2) << " dot: " << dot << std::endl;
-        if (dot<0) {
-            std::cerr << "Houston, we have a problem! Bad direction found" << std::endl;
-        }
     }
 
     double line_search(const double eps, std::vector<double> &deltaX, std::vector<double> &deltaY) {
@@ -318,20 +296,23 @@ struct Untangle2D {
 
     bool go() {
         compute_hessian_pattern();
-
 #if UNTANGLE
         double param = 1;
 #else
         double param = 0;
 #endif
         evaluate_jacobian(X);
+
         if (debug>0) std::cerr <<  "number of inverted elements: " << ninverted << std::endl;
 
         double qual_max_prev = std::numeric_limits<double>::max();
         for (int itero=0; itero<maxiter; itero++) {
             double E_prev = evaluate_energy(param, X);
             for (int iter=0; iter<5; iter++) {
-                if (debug>0) std::cerr << "iteration #" << iter << std::endl;
+#if !UNTANGLE
+                um_assert(!ninverted);
+#endif
+                if (debug>1) std::cerr << "iteration #" << iter << std::endl;
 
                 double E_prev = evaluate_energy(param, X);
 
@@ -341,11 +322,10 @@ struct Untangle2D {
                 line_search(param, deltaX, deltaY);
 
                 double E = evaluate_energy(param, X);
-                if (debug>0) std::cerr << "E: " << E << " param: " << param << " detmin: " << detmin << " ninv: " << ninverted << std::endl;
+                if (debug>1) std::cerr << "E: " << E << " param: " << param << " detmin: " << detmin << " ninv: " << ninverted << std::endl;
 
                 if  (std::abs(E_prev - E)/E<1e-5) break;
             }
-//          break;
             double qual_max = -std::numeric_limits<double>::max();
 #pragma omp parallel for reduction(max:qual_max)
             for (int t=0; t<m.nfacets(); t++) {
@@ -354,9 +334,8 @@ struct Untangle2D {
                 double g = (1+det[t]*det[t])/(2.*c1);
                 qual_max = std::max(qual_max, ((1.-theta)*f + theta*g));
             }
-            std::cerr << "qual_max: " << qual_max << std::endl;
             double E = evaluate_energy(param, X);
-            std::cerr << "E_prev: " << E_prev << " E: " << E << std::endl;
+            std::cerr << "f_+: " << qual_max << /*" E_prev: " << E_prev <<*/ " E: " << E << std::endl;
 #if UNTANGLE
             if (detmin>0 && std::abs(E_prev - E)/E<1e-5) break;
             double sigma = std::max(1.-E/E_prev, 2e-1);
@@ -376,30 +355,30 @@ struct Untangle2D {
 
 
     void print_quality() {
-	    evaluate_jacobian(X);
-	    double qual_max = -std::numeric_limits<double>::max();
-	    double smin =  std::numeric_limits<double>::max();
-	    double smax = -std::numeric_limits<double>::max();
-	    for (int t : facet_iter(m)) {
-		    mat2x2 J = this->J[t];
+        evaluate_jacobian(X);
+        double qual_max = -std::numeric_limits<double>::max();
+        double smin =  std::numeric_limits<double>::max();
+        double smax = -std::numeric_limits<double>::max();
+        for (int t : facet_iter(m)) {
+            mat2x2 J = this->J[t];
 
-		    double f = (J[0]*J[0] + J[1]*J[1])/(2.*J.det());
-		    double g = (1+J.det()*J.det())/(2.*J.det());
-		    qual_max = std::max(qual_max, ((1.-theta)*f + theta*g));
+            double f = (J[0]*J[0] + J[1]*J[1])/(2.*J.det());
+            double g = (1+J.det()*J.det())/(2.*J.det());
+            qual_max = std::max(qual_max, ((1.-theta)*f + theta*g));
 
-		    mat2x2 G = J.transpose() * J;
-		    mat2x2 evec;
-		    vec2 eval;
-		    eigendecompose_symmetric(G, eval, evec);
-		    smax = std::max(smax, std::sqrt(eval.x));
-		    smin = std::min(smin, std::sqrt(eval.y));
-	    }
-	    std::cerr << "qual_max= " << qual_max <<  ", t = " << 1./qual_max << std::endl;
-	    std::cerr << "sqrt(smax/smin) = " << std::sqrt(smax/smin) << std::endl;
+            mat2x2 G = J.transpose() * J;
+            mat2x2 evec;
+            vec2 eval;
+            eigendecompose_symmetric(G, eval, evec);
+            smax = std::max(smax, std::sqrt(eval.x));
+            smin = std::min(smin, std::sqrt(eval.y));
+        }
+        std::cerr << "f_+ = " << qual_max <<  ", t = " << 1./qual_max << std::endl;
+        std::cerr << "sqrt(smax/smin) = " << std::sqrt(smax/smin) << std::endl;
     }
 
     ////////////////////////////////
-    // Untangle2D state variables //
+    //      state variables       //
     ////////////////////////////////
 
     // optimization input parameters
@@ -407,12 +386,11 @@ struct Untangle2D {
     double theta = 0.5; // the energy is (1-theta)*(shape energy) + theta*(area energy)
     int maxiter = 1000;    // max number of outer iterations
     int nlmaxiter = 15000;
-    double nlthreshold = 1e-15;
+    double nlthreshold = 1e-8;
 
-    int debug = 5;          // verbose level
+    int debug = 1;          // verbose level
 
     // optimization state variables
-
     std::vector<double> X;     // current geometry
     PointAttribute<bool> lock; // currently lock = boundary vertices
     FacetAttribute<mat<3,2>> ref_tri;
@@ -429,134 +407,44 @@ struct Untangle2D {
 
 int main(int argc, char** argv) {
     if (argc<2) {
-        std::cerr << "Usage: " << argv[0] << " 3d.obj" << std::endl;
+        std::cerr << "Usage: " << argv[0] << " 3d-surface-with-texcoords-per-vertex.obj [output.obj]" << std::endl;
         return 1;
     }
 
     std::cerr << "Optimizing " << argv[1] << std::endl;
 
-    std::string res_filename = "result.geogram";
-    if (argc>2) {
+    std::string res_filename = "quasi-isometric-map.obj";
+    if (argc>2)
         res_filename = std::string(argv[2]);
-    }
 
     Triangles m;
     SurfaceAttributes attr = read_by_extension(argv[1], m);
     m.delete_isolated_vertices();
 
-    write_by_extension("input.obj", m, attr);
-
-
-//  std::vector<bool> to_kill(m.nverts(), false);
-//  for (int v : vert_iter(m))
-//      to_kill[v] = (m.points[v].z<0);
-//  m.delete_vertices(to_kill);
-//  write_wavefront_obj("gna.obj", m);
-
     PointAttribute<vec2> tex_coord("tex_coord", attr, m);
-//   for (int v : vert_iter(m)) {
-//        tex_coord[v] = {m2.points[v][0], m2.points[v][1]};
-//        tex_coord[v] = {m.points[v][0], m.points[v][1]};
-//    }
-
-    /*
-    vec2 bbmin, bbmax; // these are used to undo the scaling we apply to the model
-    const double boxsize = 10.;
-    { // scale the target domain for better numerical stability
-        bbmin = bbmax = tex_coord[0];
-        for (int v : vert_iter(m)) {
-            for (int d : range(2)) {
-                bbmin[d] = std::min(bbmin[d], tex_coord[v][d]);
-                bbmax[d] = std::max(bbmax[d], tex_coord[v][d]);
-            }
-        }
-        double maxside = std::max(bbmax.x-bbmin.x, bbmax.y-bbmin.y);
-        for (int v : vert_iter(m))
-            tex_coord[v] = (tex_coord[v] - (bbmax+bbmin)/2.)*boxsize/maxside + vec2(1,1)*boxsize/2.;
-    }
-
-//    { // scale the input geometry to have the same area as the target domain
-        double target_area = 0;
-        for (int t : facet_iter(m)) {
-            vec2 a = tex_coord[m.vert(t, 0)];
-            vec2 b = tex_coord[m.vert(t, 1)];
-            vec2 c = tex_coord[m.vert(t, 2)];
-            target_area += triangle_area_2d(a, b, c);
-        }
-        um_assert(target_area>0); // ascertain mesh requirements
-        double source_area = 0;
-        for (int t : facet_iter(m))
-            source_area += m.util.unsigned_area(t);
-        for (vec3 &p : m.points)
-            p *= std::sqrt(target_area/source_area);
-//    }
-    */
-
     Untangle2D opt(m);
-
-#if 0
-    for (int t : facet_iter(m)) {
-        opt.area[t] = target_area/m.nfacets();
-        double a =  sqrt(opt.area[t]*4./sqrt(3.));
-        vec2 A = {0., 0.};
-        vec2 B = {a, 0.};
-        vec2 C = {a/2., std::sqrt(3.)/2.*a};
-        mat<2,2> ST = {{B-A, C-A}};
-        opt.ref_tri[t] = mat<3,2>{{ {-1,-1},{1,0},{0,1} }}*ST.invert_transpose();
-    }
-#endif
 
     for (int v : vert_iter(m))
         for (int d : range(2))
             opt.X[2*v+d] = tex_coord[v][d];
 
-//#if UNTANGLE
-//    opt.lock_boundary_verts();
-//#endif
-
-	opt.print_quality();
+    opt.print_quality();
     auto t1 = std::chrono::high_resolution_clock::now();
     bool success = opt.go();
     auto t2 = std::chrono::high_resolution_clock::now();
     std::chrono::duration<double> time = t2 - t1;
 
     if (success) {
-	opt.print_quality();
+        opt.print_quality();
         std::cerr << "SUCCESS; running time: " << time.count() << " s; min det J = " << opt.detmin << std::endl;
     } else {
         std::cerr << "FAIL TO UNTANGLE!" << std::endl;
-	return -1;
+        return -1;
     }
 
-#if 1
-    for (int v : vert_iter(m)) {
+    for (int v : vert_iter(m))
         for (int d : range(2))
             tex_coord[v][d] = opt.X[2*v+d];
-    }
-    /*
-    { // restore scale
-        double maxside = std::max(bbmax.x-bbmin.x, bbmax.y-bbmin.y);
-        for (int v : vert_iter(m))
-            tex_coord[v] = (tex_coord[v] - vec2(1,1)*boxsize/2)/boxsize*maxside + (vec2(bbmax.x, bbmax.y)+vec2(bbmin.x, bbmin.y))/2.;
-    }
-    */
-    write_by_extension(res_filename, m, SurfaceAttributes{ { {"tex_coord", tex_coord.ptr} }, {}, {} });
-#else
-    for (int v : vert_iter(m)) {
-        for (int d : range(2))
-            m.points[v][d] = opt.X[2*v+d];
-        m.points[v].z = 0;
-    }
-    /*
-    { // restore scale
-        double maxside = std::max(bbmax.x-bbmin.x, bbmax.y-bbmin.y);
-        for (vec3 &p : m.points)
-            p = (p - vec3(1,1,1)*boxsize/2)/boxsize*maxside + (vec3(bbmax.x, bbmax.y, 0)+vec3(bbmin.x, bbmin.y, 0))/2.;
-    }
-    */
-    write_by_extension(res_filename, m, SurfaceAttributes{ { {"selection", opt.lock.ptr} }, { {"det", opt.det.ptr} }, {} });
-#endif
-
 
     return 0;
 }
