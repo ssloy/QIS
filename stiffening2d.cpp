@@ -297,7 +297,15 @@ struct Untangle2D {
     bool go() {
         compute_hessian_pattern();
 #if UNTANGLE
-        double param = 1;
+        double qual_max = -std::numeric_limits<double>::max();
+#pragma omp parallel for reduction(max:qual_max)
+        for (int t=0; t<m.nfacets(); t++) {
+            double c1 = det[t];
+            double f = (J[t][0]*J[t][0] + J[t][1]*J[t][1])/(2.*c1);
+            double g = (1+det[t]*det[t])/(2.*c1);
+            qual_max = std::max(qual_max, ((1.-theta)*f + theta*g));
+        }
+        double param = (1.-1e-10)/qual_max;
 #else
         double param = 0;
 #endif
