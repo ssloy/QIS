@@ -1,4 +1,4 @@
-cmake_minimum_required(VERSION 2.8)
+cmake_minimum_required(VERSION 3.1)
 project(stiffening)
 
 if(NOT CMAKE_BUILD_TYPE)
@@ -31,13 +31,4 @@ endif()
 
 add_executable(stiffening2d stiffening2d.cpp)
 target_link_libraries(stiffening2d ultimaille OpenNL_psm)
-
-add_executable(amips amips.cpp)
-target_link_libraries(amips ultimaille)
-
-add_executable(untangle2d untangle2d.cpp)
-target_link_libraries(untangle2d ultimaille)
-
-add_executable(stiffening3d stiffening3d.cpp)
-target_link_libraries(stiffening3d ultimaille OpenNL_psm)
 
