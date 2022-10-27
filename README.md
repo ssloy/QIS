@@ -9,6 +9,7 @@ mkdir build &&
 cd build &&
 cmake .. &&
 make -j &&
-./stiffening2d ../stress-test.obj result.obj
+./stiffening2d ../hand.obj &&
+./stiffening3d ../wrench-rest.mesh ../wrench-init.mesh ../wrench-lock.txt
 ```
 

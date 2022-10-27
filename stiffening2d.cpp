@@ -19,14 +19,12 @@ int main(int argc, char** argv) {
     constexpr double bfgs_threshold  = 1e-8;
     constexpr double outer_threshold = 1e-3;
     constexpr bool lock_boundary = false;
+    const std::string res_filename = "result.obj";
 
-    if (2>argc) {
-        std::cerr << "Usage: " << argv[0] << " model.obj [result.obj]" << std::endl;
+    if (2!=argc) {
+        std::cerr << "Usage: " << argv[0] << " input.obj" << std::endl;
         return 1;
     }
-
-    std::string res_filename = "result.obj";
-    if (3<=argc) res_filename = std::string(argv[2]);
 
     Triangles m;
     SurfaceAttributes attr = read_by_extension(argv[1], m);

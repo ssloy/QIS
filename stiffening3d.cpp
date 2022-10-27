@@ -1,4 +1,5 @@
 #include <iostream>
+#include <fstream>
 #include <algorithm>
 #include <cmath>
 #include <cstring>
@@ -9,27 +10,41 @@ using Clock = std::chrono::high_resolution_clock;
 using namespace std::literals::chrono_literals;
 using namespace UM;
 
+static void read_lock(const std::string& filename, PointAttribute<bool>& locks) {
+    std::ifstream in;
+    in.open(filename, std::ifstream::in);
+    if (in.fail()) {
+        std::cerr << "Failed to open " << filename << std::endl;
+        return;
+    }
+    std::string line;
+    std::getline(in, line);
+    while (!in.eof()) {
+        std::getline(in, line);
+        if (line == "") continue;
+        std::istringstream iss(line.c_str());
+        int v;
+        iss >> v;
+        locks[v] = true;
+    }
+}
+
 int main(int argc, char** argv) {
     constexpr double theta = 1./2.; // the energy is (1-theta)*(shape energy) + theta*(area energy)
     constexpr int bfgs_maxiter  = 30000; // max number of inner iterations
     constexpr int outer_maxiter = 3000;  // max number of outer iterations
-    constexpr double bfgs_threshold  = 1e-15;
-    constexpr double outer_threshold = 1e-4;
+    constexpr double bfgs_threshold  = 1e-9;
+    constexpr double outer_threshold = 1e-3;
+    const std::string res_filename = "result.mesh";
 
-    if (3>argc) {
-        std::cerr << "Usage: " << argv[0] << " init.mesh reference.mesh [result.mesh]" << std::endl;
+    if (argc<3) {
+        std::cerr << "Usage: " << argv[0] << " reference.mesh init.mesh [vertices-lock.txt]" << std::endl;
         return 1;
-    }
-
-    std::string res_filename = "result.mesh";
-    if (4<=argc) {
-        res_filename = std::string(argv[3]);
     }
 
     Tetrahedra ref, ini;
     read_by_extension(argv[1], ref);
     read_by_extension(argv[2], ini);
-//    std::cerr << "Stiffening " << argv[1] << "," << ini.nverts() << "," << std::endl;
 
     if (ini.nverts()!=ref.nverts() || ini.ncells()!=ref.ncells()) {
         std::cerr << "Error: " << argv[1] << " and " << argv[2] << " must have the same number of vertices and tetrahedra, aborting" << std::endl;
@@ -65,7 +80,11 @@ int main(int argc, char** argv) {
         for (int d : {0,1,2})
             X[3*v+d] = ini.points[v][d];
 
-    { // lock boundary vertices
+    if (argc==4) {
+        std::cerr << "Locking vertices specified by " << argv[3] << std::endl;
+        read_lock(argv[3], lock);
+    } else { // lock boundary vertices
+        std::cerr << "Locking boundary vertices" << std::endl;
         OppositeFacet conn(ini);
         for (int c : cell_iter(ini))
             for (int lf : {0,1,2,3})
@@ -111,7 +130,7 @@ int main(int argc, char** argv) {
         return t;
     };
 
-    double param = (1.-1e-1)/qual_max(X);
+    double param = (1.-1e-3)/qual_max(X);
     std::cerr << "Stiffening " << argv[1] << " - " << argv[2] << ", nverts: " << ini.nverts() << ", " << " max distortion: " << qual_max(X) << std::endl;
 
     auto starting_time = Clock::now();
@@ -199,7 +218,7 @@ int main(int argc, char** argv) {
     if (inverted)
         for (vec3 &p : ini.points)
             p.x *= -1;
-    write_by_extension(res_filename, ini, VolumeAttributes{ { {"selection", lock.ptr} }, { /*{"det", opt.det.ptr}*/ }, {}, {} });
+    write_by_extension(res_filename, ini, VolumeAttributes{ { {"selection", lock.ptr} }, {}, {}, {} });
 
     return 0;
 }
