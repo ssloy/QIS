@@ -17,7 +17,7 @@ int main(int argc, char** argv) {
     constexpr int bfgs_maxiter  = 30000; // max number of inner iterations
     constexpr int outer_maxiter = 3000;  // max number of outer iterations
     constexpr double bfgs_threshold  = 1e-8;
-    constexpr double outer_threshold = 1e-3;
+    constexpr double outer_threshold = 1e-5;
     constexpr bool lock_boundary = false;
     const std::string res_filename = "result.obj";
 
@@ -32,6 +32,7 @@ int main(int argc, char** argv) {
     FacetAttribute<mat<3,2>> reference(m);   // desired 2D triangle geometry
     FacetAttribute<double>   area(m);        // 3D triangle area
     std::vector<double> X(m.nverts()*2, 0.); // optimization variables
+    std::vector<double> T(m.nverts(), 0.); // sub-problem optimization variables
     PointAttribute<bool> lock(m, false);     // locked vertices
 
     for (int t : facet_iter(m))
@@ -83,7 +84,7 @@ int main(int argc, char** argv) {
     std::vector<SpinLock> spin_locks(X.size());
     for (int iter=0; iter<outer_maxiter; iter++) {
         std::cerr << "Outer iteration #" << iter << std::endl;
-        const STLBFGS::func_grad_eval func = [&](const std::vector<double>& X, double& F, std::vector<double>& G) {
+        const auto funcX = [&](const std::vector<double>& X, double& F, std::vector<double>& G) {
             std::fill(G.begin(), G.end(), 0);
             F = 0;
             int err = 0;
@@ -120,23 +121,56 @@ int main(int argc, char** argv) {
             if (err) F = 1e32;
         };
 
-        double E_prev, E;
-        std::vector<double> trash(X.size());
-        func(X, E_prev, trash);
+        double E_prev;
+        std::vector<double> GX(X.size());
+	funcX(X, E_prev, GX);
         double qual_max_prev = qual_max(X);
 
-        STLBFGS::Optimizer opt{func};
+	mat2x2 A = {};
+	for (int i : {0,1})
+		for (int j : {0,1})
+			for (int k=0; k<m.nverts(); k++)
+				A[i][j] += GX[k*2+i]*GX[k*2+j];
+	mat2x2 evec;
+	vec2 eval;
+	eigendecompose_symmetric(A, eval, evec);
+	vec2 dir = evec.col(0);
+	std::vector<double> Xtmp(m.nverts()*2, 0.);
+
+	std::cerr << std::sqrt(eval.x) << std::endl;
+
+	const auto funcT = [&](const std::vector<double>& T, double& F, std::vector<double>& GT) {
+		std::fill(GT.begin(), GT.end(), 0);
+		F = 0;
+		for (int k=0; k<m.nverts(); k++)
+			for (int d: {0,1})
+				Xtmp[k*2+d] = X[k*2+d] + T[k]*dir[d];
+		funcX(Xtmp, F, GX);
+#pragma omp parallel for
+		for (int v=0; v<m.nverts(); v++)
+			GT[v] = GX[v*2+0]*dir.x + GX[v*2+1]*dir.y;
+	};
+
+
+        STLBFGS::Optimizer opt{funcT};
         opt.ftol = opt.gtol = bfgs_threshold;
         opt.maxiter = bfgs_maxiter;
-        opt.run(X);
+        opt.run(T);
 
-        func(X, E, trash);
+
+	for (int k=0; k<m.nverts(); k++)
+		for (int d: {0,1})
+			X[k*2+d] += T[k]*dir[d];
+	std::fill(T.begin(), T.end(), 0);
+
+	double E;
+        funcX(X, E, GX);
         std::cerr << "E: " << E_prev << " --> " << E << ", t: " << param << ", max distortion: " << qual_max(X) << std::endl;
 
         const double sigma = std::max(1.-E/E_prev, 1e-1);
         const double qmax = qual_max(X);
 	if (E>1e5) break;
-//      if (std::abs(qual_max_prev - qmax)/qmax<outer_threshold) break;
+     //   if (std::abs(qual_max_prev - qmax)/qmax<outer_threshold) break;
         param = param + sigma*(1.-param*qmax)/qmax;
     }
 
@@ -147,3 +181,16 @@ int main(int argc, char** argv) {
     return 0;
 }
 
+
+/*
+x = x0 + at
+
+x-x0 = at
+t = (x-x0)/a
+
+
+f(t) = f (x0 + at)
+
+
+d f(t)/dt = df(x)/dx * a
+*/
